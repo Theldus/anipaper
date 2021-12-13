@@ -52,24 +52,35 @@ OBJS = $(C_SRC:.c=.o)
 
 .phony: all clean
 
+# Pretty print
+Q := @
+ifeq ($(V), 1)
+	Q :=
+endif
+
 # Build objects rule
 %.o: %.c
-	$(CC) $< $(CFLAGS) -c -o $@
+	@echo "  CC      $@"
+	$(Q)$(CC) $< $(CFLAGS) -c -o $@
 
 all: $(TARGET)
 
 # Anipaper
 $(TARGET): $(OBJS)
-	$(CC) $(OBJS) $(CFLAGS) -o $@ $(LDFLAGS) $(LDLIBS)
+	@echo "  LD      $@"
+	$(Q)$(CC) $(OBJS) $(CFLAGS) -o $@ $(LDFLAGS) $(LDLIBS)
 
 # Install rules
-install: all
-	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)
+install: $(TARGET)
+	@echo "  INSTALL      $^"
+	$(Q)install -d $(DESTDIR)$(BINDIR)
+	$(Q)install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)
 
 # Uninstall rules
 uninstall:
 	$(RM) $(DESTDIR)$(BINDIR)/$(TARGET)
 
+# Clean rules
 clean:
-	$(RM) $(TARGET) $(OBJS)
+	@echo "  CLEAN      $(TARGET) $(OBJS)"
+	$(Q)$(RM) $(TARGET) $(OBJS)
