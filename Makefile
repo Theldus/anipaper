@@ -20,14 +20,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-FFMPEG_LIBS = libavcodec \
-	libavformat libswscale
+#===================================================================
+# Paths
+#===================================================================
+
+PREFIX ?= /usr/local
+BINDIR  = $(PREFIX)/bin
 
 #
 # Enable -DDECODE_TO_FILE to enable file dump
 #
 
-CC = gcc
+#===================================================================
+# Flags
+#===================================================================
+
+FFMPEG_LIBS = libavcodec \
+	libavformat libswscale
+
+CC ?= gcc
 CFLAGS += -Wall -Wextra -std=c99 -pedantic -O3
 CFLAGS += $(shell pkg-config --cflags $(FFMPEG_LIBS) sdl2)
 LDLIBS  = $(shell pkg-config --libs --static $(FFMPEG_LIBS))
@@ -47,8 +58,18 @@ OBJS = $(C_SRC:.c=.o)
 
 all: $(TARGET)
 
+# Anipaper
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) $(CFLAGS) -o $@ $(LDFLAGS) $(LDLIBS)
+
+# Install rules
+install: all
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)
+
+# Uninstall rules
+uninstall:
+	$(RM) $(DESTDIR)$(BINDIR)/$(TARGET)
 
 clean:
 	$(RM) $(TARGET) $(OBJS)
