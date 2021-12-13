@@ -1,5 +1,7 @@
-# anipaper
-📽 A simple X11+SDL2 animated wallpaper setter and video player
+# anipaper 📽
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+A simple X11+SDL2 animated wallpaper setter and video player
 
 ## Introduction
 Anipaper (ANImated Wallpaper) is a simple 'wallpaper setter' for X11
@@ -61,8 +63,45 @@ a lot depending on codec, framerate, and video resolution. What I suggest is
 testing these combinations and finding a balance that you like =).
 
 ## Known limitations
+Incompatibility with compositors. Since compositors use X11's root window to manage
+other windows, feature used by Anipaper. It is also clear that there is no Wayland
+compatibility.
 
 ## Building/Installing
+There is only two dependencies: SDL2 and FFmpeg libraries (`libavcodec`, `libavformat`,
+among others).
+
+However, it is worth noting that due to constant API change between major
+versions of FFmpeg, it is recommended to use libavcodec version 59 (also successfully
+tested on 58). If you want to be more accurate, use the following commit hash:
+`3a9861e22c636d843c10e23f5585196d1f3400dd`.
+
+A typical build on Ubuntu 18.04.5 would look something like:
+
+### Dependencies
+```bash
+# Install SDL2
+$ sudo apt install libsdl2-dev
+
+
+# Install FFmpeg's libraries (nasm and pkg-config are FFmpeg build dependencies):
+$ sudo apt install pkg-config nasm
+$ wget https://github.com/FFmpeg/FFmpeg/archive/3a9861e22c636d843c10e23f5585196d1f3400dd.zip
+$ unzip -q FFmpeg-3a9*.zip
+$ rm FFmpeg-3a9*.zip
+$ cd FFmpeg-3a9*/
+$ ./configure
+$ make -j$(nproc)
+$ sudo make install
+```
+
+### Anipaper build
+```bash
+$ make
+
+# Optionally (if you want to install):
+$ make install # (PREFIX and DESTDIR allowed here, defaults to /usr/local/)
+```
 
 ## Contributing
 Anipaper is always open to the community and willing to accept contributions,
