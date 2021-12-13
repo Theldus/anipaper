@@ -22,8 +22,8 @@
  * SOFTWARE.
  */
 
-#ifndef FRAME_H
-#define FRAME_H
+#ifndef ANIPAPER_H
+#define ANIPAPER_H
 
 	/*
 	 * Useful decode parameters, holds a bunch of data
@@ -55,4 +55,4 @@
 
 	extern int64_t time_microsecs(void);
 
-#endif /* FRAME_H */
+#endif /* ANIPAPER_H */

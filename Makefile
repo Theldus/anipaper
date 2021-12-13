@@ -34,9 +34,9 @@ LDLIBS  = $(shell pkg-config --libs --static $(FFMPEG_LIBS))
 LDLIBS += $(shell pkg-config --libs sdl2)
 LDLIBS += -lX11
 
-TARGET = frame
+TARGET = anipaper
 
-C_SRC = frame.c util.c
+C_SRC = anipaper.c util.c
 OBJS = $(C_SRC:.c=.o)
 
 .phony: all clean

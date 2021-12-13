@@ -34,7 +34,7 @@
 #include <SDL.h>
 #include <X11/Xlib.h>
 
-#include "frame.h"
+#include "anipaper.h"
 
 /* Logs. */
 #define LOG_GOTO(log,lbl) \

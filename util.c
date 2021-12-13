@@ -29,7 +29,7 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 
-#include "frame.h"
+#include "anipaper.h"
 
 /**
  * @brief Save the frame @p frame as a PPM file.
