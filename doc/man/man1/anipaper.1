@@ -1,0 +1,71 @@
+.\" MIT License
+.\"
+.\" Copyright (c) 2021 Davidson Francis <davidsondfgl@gmail.com>
+.\"
+.\" Permission is hereby granted, free of charge, to any person obtaining a copy
+.\" of this software and associated documentation files (the "Software"), to deal
+.\" in the Software without restriction, including without limitation the rights
+.\" to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+.\" copies of the Software, and to permit persons to whom the Software is
+.\" furnished to do so, subject to the following conditions:
+.\"
+.\" The above copyright notice and this permission notice shall be included in all
+.\" copies or substantial portions of the Software.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+.\" IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+.\" AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+.\" LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+.\" OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+.\" SOFTWARE.
+.\"
+
+.TH man 1 "12 Dec 2021" "0.1" "anipaper man page"
+.SH NAME
+anipaper \-  A simple X11+SDL2 animated wallpaper setter and video player
+.SH SYNOPSIS
+\fBanipaper\fR [\fIoptions\fR] <input-file>
+.SH DESCRIPTION
+.PP
+\fBAnipaper\fR is a simple 'wallpaper setter' for X11 environments that
+uses the root window to display videos in loop.
+
+Built on top of the FFmpeg libraries (libavcodec and companions),
+Anipaper strives to be as simple as possible, having only the basics,
+thus ensuring a readable and highly modifiable source code.
+Furthermore, as it uses SDL2, it has a good performance without
+consuming all system resources, depending on the type of video to be
+played.
+.SH OPTIONS
+.IP "-h"
+This help
+.IP "-o"
+Execute video file only once, without loop. Loop is enabled by default.
+.IP "-w"
+Run in windowed mode, i.e: act as a normal video player, without setting
+wallpaper.
+.PP
+.I Resolution options:
+.IP "-k"
+Keep video resolution, may appears smaller or bigger than the screen.
+.IP "-s"
+Scale to screen resolution, occupies the entire screen regardless of the
+video aspect ration!
+.IP "-f"
+Fit to screen. Make the video fit into the screen, preserving the video
+aspect ration. (default)
+.IP "-r"
+Set the screen resolution, in format: WIDTHxHEIGHT.
+.SH NOTES
+Please note that some options depends on the screen resolution. If unable
+to get the resolution and the
+.IR -r
+parameter is not set:
+.RS 2
+.IP \(em 2
+If X11 (wallpaper) mode: The video will always fill the screen area
+.IP \(em 2
+If Windowed mode (\fI-w\fR): Window will be the same size as the video file
+.SH AUTHOR
+Davidson Francis (davidsondfgl@gmail.com)

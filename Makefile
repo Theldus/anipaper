@@ -24,8 +24,10 @@
 # Paths
 #===================================================================
 
-PREFIX ?= /usr/local
-BINDIR  = $(PREFIX)/bin
+PREFIX  ?= /usr/local
+BINDIR   = $(PREFIX)/bin
+MANDIR   = $(PREFIX)/man
+MANPAGES = $(CURDIR)/doc/
 
 #
 # Enable -DDECODE_TO_FILE to enable file dump
@@ -72,9 +74,12 @@ $(TARGET): $(OBJS)
 
 # Install rules
 install: $(TARGET)
-	@echo "  INSTALL      $^"
+	@echo "  INSTALL      $^ anipaper.1"
+	$(Q)strip --strip-debug anipaper
 	$(Q)install -d $(DESTDIR)$(BINDIR)
 	$(Q)install -m 755 $(TARGET) $(DESTDIR)$(BINDIR)
+	$(Q)install -d $(DESTDIR)$(MANDIR)/man1
+	$(Q)install -m 644 $(MANPAGES)/man/man1/*.1 $(DESTDIR)$(MANDIR)/man1/
 
 # Uninstall rules
 uninstall:
