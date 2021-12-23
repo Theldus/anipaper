@@ -43,8 +43,8 @@
 		goto lbl; \
 	} while (0)
 
-#define LOG(log) \
-	fprintf(stderr, "INFO: " log)
+#define LOG(...) \
+	fprintf(stderr, "INFO: " __VA_ARGS__)
 
 /* Queues size. */
 #define MAX_PACKET_QUEUE 128
@@ -112,15 +112,17 @@ static SDL_Thread *decode_thread;
 /* SDL Events. */
 static int SDL_EVENT_REFRESH_SCREEN;
 
-/* CMD Flags. */
+/* CMD Flags/parameters. */
 #define CMD_LOOP              1
 #define CMD_WINDOWED          2
 #define CMD_RESOLUTION_KEEP   4
 #define CMD_RESOLUTION_SCALE  8
 #define CMD_RESOLUTION_FIT   16
+#define CMD_HW_ACCEL         32
 static int cmd_flags = CMD_LOOP | CMD_RESOLUTION_FIT;
 static int set_screen_width;
 static int set_screen_height;
+static char device_type[16];
 
 /**
  * @brief Initialize the packet queue.
@@ -386,6 +388,9 @@ static int picture_queue_put(struct av_decode_params *dp,
 	pl->pts = (double)src_frm->best_effort_timestamp * dp->time_base;
 	pl->picture = picture;
 	pl->next = NULL;
+
+	/* Free frame buffers. */
+	av_frame_unref(src_frm);
 
 	/* Add to our list. */
 	SDL_LockMutex(q->mutex);
@@ -703,10 +708,12 @@ again:
  *
  * @return Returns 0 if success, -1 otherwise.
  */
-static int decode_packet(AVPacket *packet, AVFrame *frame,
+static int decode_packet(AVPacket *packet,
+	AVFrame *src_frame, AVFrame *dst_frame,
 	struct av_decode_params *dp)
 {
 	int ret;
+	AVFrame *frame;
 
 	/* Send packet data as input to a decoder. */
 	ret = avcodec_send_packet(dp->codec_context, packet);
@@ -716,11 +723,45 @@ static int decode_packet(AVPacket *packet, AVFrame *frame,
 	while (ret >= 0)
 	{
 		/* Get decoded output (i.e: frame) from the decoder. */
-		ret = avcodec_receive_frame(dp->codec_context, frame);
+		ret = avcodec_receive_frame(dp->codec_context, src_frame);
+
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
 			break;
+
 		else if (ret < 0)
 			LOG_GOTO("Error while getting a frame from the decoder!\n", out);
+
+		/* Check if our frame is CPU or GPU. */
+		if ((cmd_flags & CMD_HW_ACCEL) &&
+			src_frame->format == dp->hw_pix_fmt)
+		{
+			/* GPU, receive data from GPU to CPU and convert. */
+			dst_frame->format = AV_PIX_FMT_YUV420P;
+			ret = av_hwframe_transfer_data(dst_frame, src_frame, 0);
+
+			if (ret < 0)
+			{
+				av_frame_unref(src_frame);
+				LOG_GOTO("Error while transfering GPU frame to CPU\n", out);
+			}
+
+			/*
+			 * Looks like av_hwframe_transfer_data() does not copy other
+			 * data from the frame besides the buffer, so we need to
+			 * copy the PTS manually.
+			 */
+			dst_frame->pts = src_frame->pts;
+			dst_frame->best_effort_timestamp = src_frame->best_effort_timestamp;
+
+			frame = dst_frame;
+
+			/* unref src (GPU frame, since we already use it). */
+			av_frame_unref(src_frame);
+		}
+
+		/* CPU. */
+		else
+			frame = src_frame;
 
 #ifndef DECODE_TO_FILE
 		/* We have the complete frame, enqueue it */
@@ -751,17 +792,25 @@ out:
  */
 static int decode_packets_thread(void *arg)
 {
-	int ret;
-	AVFrame *frame;
 	AVPacket packet;
+	AVFrame *sw_frame;
+	AVFrame *hw_frame;
 	struct av_decode_params *dp;
 
-	ret = 0;
 	dp = (struct av_decode_params *)arg;
 
-	frame = av_frame_alloc();
-	if (!frame)
-		LOG_GOTO("Unable to allocate an AVFrame!\n", out0);
+	sw_frame = av_frame_alloc();
+	if (!sw_frame)
+		LOG_GOTO("Unable to allocate a SW AVFrame!\n", out0);
+
+	if (cmd_flags & CMD_HW_ACCEL)
+	{
+		hw_frame = av_frame_alloc();
+		if (!hw_frame)
+			LOG_GOTO("Unable to allocate a HW AVFrame!\n", out1);
+	}
+	else
+		hw_frame = NULL;
 
 	while (1)
 	{
@@ -774,14 +823,17 @@ static int decode_packets_thread(void *arg)
 			break;
 		}
 
-		if (decode_packet(&packet, frame, dp) < 0)
+		if (decode_packet(&packet, sw_frame, hw_frame, dp) < 0)
 			break;
 
 		av_packet_unref(&packet);
 	}
+
+	av_frame_free(&hw_frame);
+out1:
+	av_frame_free(&sw_frame);
 out0:
-	av_frame_free(&frame);
-	return (ret);
+	return (0);
 }
 
 /**
@@ -848,20 +900,23 @@ out3:
 }
 
 /**
- * @brief Initializes all resources related to video decoding,
- * most of them related to libavcodec. Leaves the program in a
- * state ready to decode the video.
+ * @brief Open the video file @p file and find the appropriate
+ * codec for it.
  *
  * @param dp av_decode_params structure.
- * @param file Video to be played.
+ * @param file Video file to be played.
  *
- * @return Returns 0 if success, -1 otherwise.
+ * @return Returns the codec or NULL if none
+ * is found.
  */
-static int init_av(struct av_decode_params *dp, const char *file)
+static const AVCodec *open_file_and_find_codec(struct av_decode_params *dp,
+	const char *file)
 {
-	int i;
+	AVStream *video;
 	const AVCodec *codec;
-	AVCodecParameters *codec_parameters;
+
+	codec = NULL;
+	dp->video_idx = -1;
 
 	/* Initialize context. */
 	dp->format_context = avformat_alloc_context();
@@ -876,44 +931,37 @@ static int init_av(struct av_decode_params *dp, const char *file)
 	if (avformat_find_stream_info(dp->format_context, NULL) < 0)
 		LOG_GOTO("Unable to get stream info\n", out1);
 
-	codec = NULL;
-	codec_parameters = NULL;
-	dp->video_idx = -1;
+	/* Find video stream. */
+	dp->video_idx = av_find_best_stream(dp->format_context,
+		AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
 
-	/* Loop through all streams until find a valid/compatible video stream. */
-	for (i = 0; i < (int)dp->format_context->nb_streams; i++)
+	if (dp->video_idx < 0)
 	{
-		codec_parameters = dp->format_context->streams[i]->codecpar;
-
-		/* Skip not video. */
-		if (codec_parameters->codec_type != AVMEDIA_TYPE_VIDEO)
-			continue;
-
-		/* Try to find a codec, if not found, skip. */
-		codec = avcodec_find_decoder(codec_parameters->codec_id);
-		if (!codec)
-			continue;
-
-		dp->time_base = av_q2d(dp->format_context->streams[i]->time_base);
-		dp->video_idx = i;
-		break;
-	}
-	if (dp->video_idx == -1)
+		codec = NULL;
 		LOG_GOTO("Unable to find any compatible video stream!\n", out1);
-
-	/* Allocate a context and fill it. */
-	dp->codec_context = avcodec_alloc_context3(codec);
-	if (!dp->codec_context)
-		LOG_GOTO("Unable to create a codec context!\n", out1);
-	if (avcodec_parameters_to_context(dp->codec_context, codec_parameters) < 0)
-	{
-		LOG_GOTO("Unable to fill codec context with the codec "
-			"parameters!\n", out2);
 	}
-	if (avcodec_open2(dp->codec_context, codec, NULL) < 0)
-		LOG_GOTO("Unable to initialize a codec context!\n", out2);
 
+	video = dp->format_context->streams[dp->video_idx];
+	dp->time_base = av_q2d(video->time_base);
+	return (codec);
+
+out1:
+	avformat_close_input(&dp->format_context);
+out0:
+	return (codec);
+}
+
+/**
+ * @brief Setup the scale context if the file dump
+ * is enabled.
+ *
+ * @param dp av_decode_params structure.
+ *
+ * @return Returns 0 if success, -1 otherwise.
+ */
 #ifdef DECODE_TO_FILE
+static int sws_setup(struct av_decode_params *dp)
+{
 	/* Prepare our scale context and temporary buffer. */
 	dp->sws_ctx = sws_getContext(dp->codec_context->width,
 		dp->codec_context->height,
@@ -927,26 +975,223 @@ static int init_av(struct av_decode_params *dp, const char *file)
 		NULL
 	);
 	if (!dp->sws_ctx)
-		LOG_GOTO("Unable to create a scale context!\n", out2);
+		LOG_GOTO("Unable to create a scale context!\n", out0);
 
 	if (av_image_alloc(dp->dst_img, dp->dst_linesize,
 		dp->codec_context->width, dp->codec_context->height,
 		AV_PIX_FMT_RGB24, 16) < 0)
 	{
-		LOG_GOTO("Unable to allocate destination image!\n", out3);
+		LOG_GOTO("Unable to allocate destination image!\n", out1);
 	}
+
+	return (0);
+out1:
+	sws_freeContext(dp->sws_ctx);
+out0:
+	return (-1);
+}
+#endif
+
+/**
+ * @brief Callback that negotiates the codec format to the
+ * HW pixel format.
+ *
+ * @param ctx Codec Context.
+ * @param pix_fmts Pixel formats list.
+ *
+ * @return Returns the HW format (if supported), or
+ * AV_PIX_FMT_NONE if not supported.
+ */
+static enum AVPixelFormat get_hw_pixel_format(AVCodecContext *ctx,
+	const enum AVPixelFormat *pix_fmts)
+{
+	((void)ctx);
+	const enum AVPixelFormat *p;
+
+	for (p = pix_fmts; *p != -1; p++)
+		if (*p == dp.hw_pix_fmt)
+			return (*p);
+
+	return (AV_PIX_FMT_NONE);
+}
+
+/**
+ * @brief Setup the HW acceleration (if enabled) for a given
+ * @p codec.
+ *
+ * @param dp av_decode_params structure.
+ * @param codec Codec that will be used.
+ *
+ * @return Returns 0 if success, -1 otherwise.
+ */
+static int setup_hw_accel(struct av_decode_params *dp, const AVCodec *codec)
+{
+	int i;
+	enum AVHWDeviceType dev_type;
+	enum AVPixelFormat *tmp_pix_fmt;
+	const AVCodecHWConfig *hw_config;
+	AVHWFramesConstraints* hw_frames_const;
+
+	/* Find device type and check if it is supported. */
+	dev_type = av_hwdevice_find_type_by_name(device_type);
+	if (dev_type == AV_HWDEVICE_TYPE_NONE)
+	{
+		LOG("Device type \"%s\" is not supported!\n", device_type);
+		LOG("Available devices:\n");
+
+		while ((dev_type = av_hwdevice_iterate_types(dev_type))
+			!= AV_HWDEVICE_TYPE_NONE)
+		{
+			LOG("  %s\n", av_hwdevice_get_type_name(dev_type));
+		}
+		LOG("\n");
+		goto out0;
+	}
+
+	/*
+	 * Check if the current decoder supports hw decoding, if so,
+	 * get it's pixel format.
+	 */
+	for (i = 0; ; i++)
+	{
+		hw_config = avcodec_get_hw_config(codec, i);
+		if (!hw_config)
+			LOG_GOTO("Decoder does not support device type\n", out0);
+
+		/* Decoder should support HW_DEVICE_CTX for the current device. */
+		if ((hw_config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)
+			&& hw_config->device_type == dev_type)
+		{
+			/* Set our hw_pix_fmt. */
+			dp->hw_pix_fmt = hw_config->pix_fmt;
+			break;
+		}
+	}
+
+	/* Callback pixel format. */
+	dp->codec_context->get_format = get_hw_pixel_format;
+
+	/* Open the hw device and create an AVHWDeviceContext for it. */
+	if (av_hwdevice_ctx_create(&dp->hw_device_ctx, dev_type,
+		NULL, NULL, 0) < 0)
+	{
+		LOG_GOTO("Unable to open device and create a device context, "
+			"aborting...\n", out0);
+	}
+	dp->codec_context->hw_device_ctx = av_buffer_ref(dp->hw_device_ctx);
+
+	/*
+	 * Check if it is possible to convert the GPU pixel format to
+	 * something valid.
+	 *
+	 * The GPU generally doesn't give us a frame format that can be
+	 * displayed on screen by default. This gives us 2 options:
+	 *
+	 *  a) Convert the format that the GPU gives us (like nv12) via CPU,
+	 *  using sws_scale.
+	 *
+	 *  b) Kindly ask the GPU to do it for us. For that, the loop below
+	 *  checks if the GPU supports YUV420p. If so, we proceed normally,
+	 *  otherwise we issue an error*.
+	 *
+	 * *Yes, Anipaper is so lazy that I'm looking for a unique pixel
+	 * format here. A more sophisticated approach requires that the SDL2
+	 * be initialized to some format supported by the GPU, or that
+	 * intermediate conversions are done first (a).
+	 */
+	hw_frames_const =
+    	av_hwdevice_get_hwframe_constraints(dp->hw_device_ctx, NULL);
+
+	if (!hw_frames_const)
+		LOG_GOTO("Unable to obtain hw frame constraints...\n", out1);
+
+	for (tmp_pix_fmt = hw_frames_const->valid_sw_formats;
+		*tmp_pix_fmt != AV_PIX_FMT_NONE; tmp_pix_fmt++)
+	{
+		if (*tmp_pix_fmt == AV_PIX_FMT_YUV420P)
+			break;
+	}
+
+	/* GPU is incapable to convert to YUV420p to us, lets give up. */
+	if (*tmp_pix_fmt == AV_PIX_FMT_NONE)
+	{
+		av_hwframe_constraints_free(&hw_frames_const);
+		LOG_GOTO("Your HW device do not support conversion to YUV420p!\n",
+			out1);
+	}
+
+	av_hwframe_constraints_free(&hw_frames_const);
+	return (0);
+
+out1:
+	av_buffer_unref(&dp->hw_device_ctx);
+out0:
+	return (-1);
+}
+
+/**
+ * @brief Initializes all resources related to video decoding,
+ * most of them related to libavcodec. Leaves the program in a
+ * state ready to decode the video.
+ *
+ * @param dp av_decode_params structure.
+ * @param file Video to be played.
+ *
+ * @return Returns 0 if success, -1 otherwise.
+ */
+static int init_av(struct av_decode_params *dp, const char *file)
+{
+	AVStream *video;
+	const AVCodec *codec;
+	AVCodecParameters *codec_parameters;
+
+	/* Open file and find the appropriate codec, if any. */
+	codec = open_file_and_find_codec(dp, file);
+	if (!codec)
+		goto out0;
+
+	/* Allocate a context and fill it. */
+	dp->codec_context = avcodec_alloc_context3(codec);
+	if (!dp->codec_context)
+		LOG_GOTO("Unable to create a codec context!\n", out1);
+
+	video = dp->format_context->streams[dp->video_idx];
+	codec_parameters = video->codecpar;
+
+	if (avcodec_parameters_to_context(dp->codec_context,
+		codec_parameters) < 0)
+	{
+		LOG_GOTO("Unable to fill codec context with the codec "
+			"parameters!\n", out2);
+	}
+
+	/* If HW_ACCEL enabled, let set it up. */
+	if (cmd_flags & CMD_HW_ACCEL)
+	{
+		if (setup_hw_accel(dp, codec) < 0)
+			goto out2;
+	}
+
+	/* Open codec. */
+	if (avcodec_open2(dp->codec_context, codec, NULL) < 0)
+		LOG_GOTO("Unable to initialize a codec context!\n", out3);
+
+#ifdef DECODE_TO_FILE
+	/* Prepare our scale context and temporary buffer. */
+	if (sws_setup(dp) < 0)
+		goto out3;
 #endif
 
 	/* Initial time (in seconds). */
 	dp->frame_timer = (double)time_microsecs() / 1000000.0;
+
 	/* Frame last delay (in seconds). */
 	dp->frame_last_delay = 0.04; /* 40ms (or 25 fps). */
-
 	return (0);
-#ifdef DECODE_TO_FILE
+
 out3:
-	sws_freeContext(dp->sws_ctx);
-#endif
+	if (cmd_flags & CMD_HW_ACCEL)
+		av_buffer_unref(&dp->hw_device_ctx);
 out2:
 	avcodec_free_context(&dp->codec_context);
 out1:
@@ -964,6 +1209,10 @@ static void finish_av(struct av_decode_params *dp)
 {
 	avcodec_free_context(&dp->codec_context);
 	avformat_close_input(&dp->format_context);
+
+	if (cmd_flags & CMD_HW_ACCEL)
+		av_buffer_unref(&dp->hw_device_ctx);
+
 	sws_freeContext(dp->sws_ctx);
 #if DECODE_TO_FILE
 	av_freep(&dp->dst_img[0]);
@@ -1140,6 +1389,7 @@ static void usage(const char *prgname)
 		"     regardless of the aspect ratio!\n\n"
 		"  -f (Fit) to screen. Make the video fit into the screen (default)\n\n"
 		"  -r Set screen resolution, in format: WIDTHxHEIGHT\n\n"
+		"  -d <dev> Enable HW accel for a given device (like vaapi or vdpau)\n\n"
 		"  -h This help\n\n"
 		"Note:\n"
 		"  Please note that some options depends on the screen resolution.\n"
@@ -1213,7 +1463,7 @@ static int get_resolution(const char *res, int *w, int *h)
 static char* parse_args(int argc, char **argv)
 {
 	int c; /* Current arg. */
-	while ((c = getopt(argc, argv, "howksfr:")) != -1)
+	while ((c = getopt(argc, argv, "howksfr:d:")) != -1)
 	{
 		switch (c)
 		{
@@ -1245,6 +1495,10 @@ static char* parse_args(int argc, char **argv)
 					fprintf(stderr, "Invalid resolution (%s)\n", optarg);
 					usage(argv[0]);
 				}
+				break;
+			case 'd':
+				strncpy(device_type, optarg, sizeof(device_type) - 1);
+				cmd_flags |= CMD_HW_ACCEL;
 				break;
 			default:
 				usage(argv[0]);

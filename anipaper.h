@@ -48,6 +48,10 @@
 		double frame_last_delay;
 		double frame_last_pts;
 		double frame_timer;
+
+		/* HW decoding. */
+		AVBufferRef *hw_device_ctx;
+		enum AVPixelFormat hw_pix_fmt;
 	};
 
 	extern void save_frame_ppm(AVFrame *frame,
