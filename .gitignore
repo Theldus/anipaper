@@ -23,3 +23,8 @@
 # Default rules.
 *.o
 anipaper
+bench/lake720p_30.mp4
+bench/lake720p_60.mp4
+bench/lake1080p_30.mp4
+bench/lake1080p_60.mp4
+bench/lake1440p_30.mp4
