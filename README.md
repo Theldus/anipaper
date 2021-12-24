@@ -13,10 +13,9 @@ thus ensuring a readable and highly modifiable source code.  Furthermore,
 since it uses SDL2, it has a good performance without consuming all system
 resources, depending on the type of video to be played.
 
+https://user-images.githubusercontent.com/8294550/147177606-a184eece-5e16-4a58-9ffb-e1e8d8d76265.mp4
 <p align="center">
 <a href="https://www.youtube.com/watch?v=XtA-Jh8XU_c" target="_blank">
-<img align="center" src="https://i.imgur.com/Ye3uPyG.jpg" alt="Anipaper example">
-<br>
 Anipaper demo, click to open on YouTube
 </a></br>
 Background video by Qika Nugroho from <a href="https://pixabay.com/videos/lake-sunset-trees-leaves-japan-91562/">Pixabay</a>
@@ -44,6 +43,8 @@ Resolution options:
   -f (Fit) to screen. Make the video fit into the screen (default)
 
   -r Set screen resolution, in format: WIDTHxHEIGHT
+  
+  -d <dev> Enable HW accel for a given device (like vaapi or vdpau)
 
   -h This help
 
@@ -54,13 +55,40 @@ Note:
   - If Windowed mode: Window will be the same size as the video
 ```
 
-## Performance
-As a video player, resource usage is expected to be higher than a still-picture
-wallpaper setter (no animation), and with Anipaper it's no different.
+## Performance analysis
+Here are a series of executions on an i5 7300HQ (integrated video), with different
+resolutions, FPS and with and without hardware acceleration for
+[this](https://pixabay.com/videos/lake-sunset-trees-leaves-japan-91562/) video:
 
-However, performance is similar to `ffplay`, `mplayer`, and others... and varies
-a lot depending on codec, framerate, and video resolution. What I suggest is
-testing these combinations and finding a balance that you like =).
+### 1440p
+| Resolution        | HW Accel | FPS | CPU Usage (%): | GPU Usage (%): | Time (User/Sys/Elapsed): |
+|-------------------|----------|-----|----------------|----------------|--------------------------|
+| 1440p (2560x1440) | NO       | 60  | 65.5%          | 31.43%         | 10.38s, 0.43s, 16.51s    |
+| 1440p (2560x1440) | YES      | 60  | 32.76%         | 36.96%         | 4.67s, 0.72s, 16.48s     |
+| 1440p (2560x1440) | NO       | 30  | 35.76%         | 15.43%         | 5.69s, 0.23s, 16.61s     |
+| 1440p (2560x1440) | YES      | 30  | 16.56%         | 18.26%         | 2.31s, 0.41s, 16.50s     |
+
+### 1080p
+| Resolution        | HW Accel | FPS | CPU Usage (%): | GPU Usage (%): | Time (User/Sys/Elapsed): |
+|-------------------|----------|-----|----------------|----------------|--------------------------|
+| 1080p (1920x1080) | NO       | 60  | 40.46%         | 30.06%         | 6.4s, 0.31s, 16.58s      |
+| 1080p (1920x1080) | YES      | 60  | 21.26%         | 31.36%         | 2.89s, 0.60s, 16.47s     |
+| 1080p (1920x1080) | NO       | 30  | 23.05%         | 15.13%         | 3.59s, 0.19s, 16.49s     |
+| 1080p (1920x1080) | YES      | 30  | 10.76%         | 15.36%         | 1.46s, 0.31s, 16.49s     |
+
+### 720p
+| Resolution      | HW Accel | FPS | CPU Usage (%): | GPU Usage (%): | Time (User/Sys/Elapsed): |
+|-----------------|----------|-----|----------------|----------------|--------------------------|
+| 720p (1280x720) |    NO    |  60 |       24%      |     29.13%     |   3.72s, 0.25s, 16.58s   |
+| 720p (1280x720) |    YES   |  60 |     15.06%     |     25.56%     |   1.93s, 0.53s, 16.47s   |
+| 720p (1280x720) |    NO    |  30 |     13.36%     |      14.5%     |   2.04s, 0.15s, 16.48s   |
+| 720p (1280x720) |    YES   |  30 |      8.16%     |     12.86%     |   1.07s, 0.26s, 16.48s   |
+
+It can be observed that CPU usage decreases dramatically as resolution and FPS decrease. Also note
+that using hardware acceleration (`-d` parameter) halves CPU usage, so its use is highly recommended.
+
+(For each resolution/fps pair, the tests were repeated three times and the average was obtained.
+These tests can be run with `bench/bench.sh`)
 
 ## Known limitations
 Incompatibility with compositors. Since compositors use X11's root window to manage
