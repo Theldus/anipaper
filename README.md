@@ -87,8 +87,13 @@ resolutions, FPS and with and without hardware acceleration for
 It can be observed that CPU usage decreases dramatically as resolution and FPS decrease. Also note
 that using hardware acceleration (`-d` parameter) halves CPU usage, so its use is highly recommended.
 
-(For each resolution/fps pair, the tests were repeated three times and the average was obtained.
-These tests can be run with `bench/bench.sh`)
+**Note 1**: For each resolution/fps pair, the tests were repeated three times and the average was
+obtained. These tests can be run with `bench/bench.sh`)
+
+**Note 2**: Please note that the CPU time reported by `intel_gpu_time` is the CPU time of all cores.
+As Anipaper's actual CPU usage is generally distributed evenly across the cores/threads, the
+consumption of each core is more-or-less /num_cores, i.e: 8% usage means approximately 2%
+per core on a quadcore system.
 
 ## Known limitations
 Incompatibility with compositors. Since compositors use X11's root window to manage
