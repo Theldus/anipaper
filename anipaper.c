@@ -120,8 +120,6 @@ static int SDL_EVENT_REFRESH_SCREEN;
 #define CMD_RESOLUTION_FIT   16
 #define CMD_HW_ACCEL         32
 static int cmd_flags = CMD_LOOP | CMD_RESOLUTION_FIT;
-static int set_screen_width;
-static int set_screen_height;
 static char device_type[16];
 
 /**
@@ -1220,6 +1218,48 @@ static void finish_av(struct av_decode_params *dp)
 }
 
 /**
+ * @brief Get the screen resolution, whether by SDL or X11.
+ *
+ * @param w Width resolution pointer.
+ * @param h Height resolution pointer.
+ *
+ * @return Returns 0 if success, -1 otherwise.
+ *
+ * @note X11 display remains opened, if SDL-only (i.e: windowed
+ * mode, this display should be closed later).
+ */
+static int get_screen_resolution(int *w, int *h)
+{
+	XWindowAttributes attr;
+	SDL_DisplayMode dm = {0};
+
+	/* Try via SDL first (assume it is already initialized). */
+	if (SDL_GetCurrentDisplayMode(0, &dm) != 0)
+	{
+		*w = dm.w;
+		*h = dm.h;
+		return (0);
+	}
+
+	/*
+	 * SDL failed, try X11, open display first.
+	 */
+	x11dip = XOpenDisplay(NULL);
+	if (!x11dip)
+		return (-1);
+
+	if (!XGetWindowAttributes(x11dip, DefaultRootWindow(x11dip), &attr))
+		return (-1);
+
+	if (!attr.width || !attr.height)
+		return (-1);
+
+	*w = attr.width;
+	*h = attr.height;
+	return (0);
+}
+
+/**
  * @brief Initializes all resources related to the
  * SDL, such as window, renderer and threads.
  *
@@ -1230,7 +1270,6 @@ static void finish_av(struct av_decode_params *dp)
 static int init_sdl(struct av_decode_params *dp)
 {
 	Window x11w;
-	SDL_DisplayMode dm = {0};
 	int width;
 	int height;
 
@@ -1239,23 +1278,14 @@ static int init_sdl(struct av_decode_params *dp)
 		LOG_GOTO("Unable to initialize SDL!\n", out0);
 
 	/* Get screen dimensions. */
-	if (!set_screen_width || !set_screen_height)
+	if (!dp->screen_width || !dp->screen_height)
 	{
-		if (SDL_GetCurrentDisplayMode(0, &dm) != 0)
-		{
-			dp->screen_width = dm.w;
-			dp->screen_height = dm.h;
-		}
-		else
+		if (get_screen_resolution(&dp->screen_width,
+			&dp->screen_height) < 0)
 		{
 			LOG("Unable to get screen resolution, please set manually "
 				"with -r!\n");
 		}
-	}
-	else
-	{
-		dp->screen_width = set_screen_width;
-		dp->screen_height = set_screen_height;
 	}
 
 	/*
@@ -1287,6 +1317,9 @@ static int init_sdl(struct av_decode_params *dp)
 			height = dp->codec_context->height;
 		}
 
+		if (x11dip)
+			XCloseDisplay(x11dip);
+
 		/* Create window. */
 		window = SDL_CreateWindow("video",
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -1298,7 +1331,8 @@ static int init_sdl(struct av_decode_params *dp)
 	/* X11. */
 	else
 	{
-		x11dip = XOpenDisplay(NULL);
+		if (!x11dip)
+			x11dip = XOpenDisplay(NULL);
 		if (!x11dip)
 			LOG_GOTO("Unable to open X11 display\n", out1);
 
@@ -1489,8 +1523,8 @@ static char* parse_args(int argc, char **argv)
 				cmd_flags |= CMD_RESOLUTION_FIT;
 				break;
 			case 'r':
-				if (get_resolution(optarg, &set_screen_width,
-					&set_screen_height) < 0)
+				if (get_resolution(optarg, &dp.screen_width,
+					&dp.screen_height) < 0)
 				{
 					fprintf(stderr, "Invalid resolution (%s)\n", optarg);
 					usage(argv[0]);
