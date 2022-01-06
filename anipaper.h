@@ -1,7 +1,7 @@
 /*
  * MIT License
  *
- * Copyright (c) 2021 Davidson Francis <davidsondfgl@gmail.com>
+ * Copyright (c) 2021-2022 Davidson Francis <davidsondfgl@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +24,26 @@
 
 #ifndef ANIPAPER_H
 #define ANIPAPER_H
+
+	#include <SDL.h>
+
+	/*
+	 * Screen area (in %) that should be occupied to pause
+	 * Anipaper.
+	 */
+#ifndef SCREEN_AREA_THRESHOLD
+	#define SCREEN_AREA_THRESHOLD 70
+#endif
+
+	/* Logs. */
+	#define LOG_GOTO(log,lbl) \
+		do { \
+			fprintf(stderr, "INFO: " log); \
+			goto lbl; \
+		} while (0)
+
+	#define LOG(...) \
+		fprintf(stderr, "INFO: " __VA_ARGS__)
 
 	/*
 	 * Useful decode parameters, holds a bunch of data
@@ -49,6 +69,12 @@
 		double frame_last_pts;
 		double frame_timer;
 
+		/* Pause stuff. */
+		int paused;
+		double time_before_pause;
+		SDL_mutex *pause_mutex;
+		SDL_cond *pause_cond;
+
 		/* HW decoding. */
 		AVBufferRef *hw_device_ctx;
 		enum AVPixelFormat hw_pix_fmt;
@@ -56,7 +82,8 @@
 
 	extern void save_frame_ppm(AVFrame *frame,
 		struct av_decode_params *dp);
-
-	extern int64_t time_microsecs(void);
+	extern double time_secs(void);
+	extern int screen_area_used(Display *disp, int screen_width,
+		int screen_height);
 
 #endif /* ANIPAPER_H */

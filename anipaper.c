@@ -1,7 +1,7 @@
 /*
  * MIT License
  *
- * Copyright (c) 2021 Davidson Francis <davidsondfgl@gmail.com>
+ * Copyright (c) 2021-2022 Davidson Francis <davidsondfgl@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -31,20 +31,9 @@
 #include <libavutil/mathematics.h>
 #include <libavfilter/avfilter.h>
 #include <libswscale/swscale.h>
-#include <SDL.h>
 #include <X11/Xlib.h>
 
 #include "anipaper.h"
-
-/* Logs. */
-#define LOG_GOTO(log,lbl) \
-	do { \
-		fprintf(stderr, "INFO: " log); \
-		goto lbl; \
-	} while (0)
-
-#define LOG(...) \
-	fprintf(stderr, "INFO: " __VA_ARGS__)
 
 /* Queues size. */
 #define MAX_PACKET_QUEUE 128
@@ -108,6 +97,7 @@ static SDL_mutex *screen_mutex;
 
 static SDL_Thread *enqueue_thread;
 static SDL_Thread *decode_thread;
+static SDL_Thread *pause_thread;
 
 /* SDL Events. */
 static int SDL_EVENT_REFRESH_SCREEN;
@@ -624,8 +614,77 @@ static double adjust_timers(double pts, struct av_decode_params *dp)
 	 * If we are too late, we ignore the frame.
 	 */
 	dp->frame_timer += delay;
-	true_delay = dp->frame_timer - (time_microsecs() / 1000000.0);
+	true_delay = dp->frame_timer - time_secs();
 	return (true_delay);
+}
+
+/**
+ * @brief Changes or keeps execution mode accordingly with the
+ * current mode and @p should_pause parameter.
+ *
+ * @param dp av_decode_params structure.
+ * @param should_pause non-zero if should pause, 0 otherwise.
+ */
+static void change_execution(struct av_decode_params *dp, int should_pause)
+{
+	SDL_LockMutex(dp->pause_mutex);
+		if (should_pause)
+		{
+			if (!dp->paused)
+				dp->time_before_pause = time_secs();
+			else
+				goto out;
+		}
+
+		/* Resume. */
+		else
+		{
+			if (dp->paused)
+				dp->frame_timer += (time_secs() - dp->time_before_pause);
+			else
+				goto out;
+		}
+
+		dp->paused = !dp->paused;
+		SDL_CondSignal(dp->pause_cond);
+out:
+	SDL_UnlockMutex(dp->pause_mutex);
+}
+
+/**
+ * @brief Checks at fixed interval if the total area
+ * of the non-minimized windows is greater than
+ * some threshold, if so, pause the Anipaper execution,
+ * otherwise, resume.
+ *
+ * This executes in another thread.
+ *
+ * @param arg av_decode_params structure.
+ *
+ * @return Always returns 0.
+ */
+static int pause_execution_thread(void *data)
+{
+	int s_area;
+	struct av_decode_params *dp;
+
+	dp = (struct av_decode_params *)data;
+
+	while (1)
+	{
+		if (should_quit)
+			break;
+
+		s_area = screen_area_used(x11dip, dp->screen_width,
+			dp->screen_height);
+
+		/* Changes or keeps execution mode. */
+		change_execution(dp, s_area > SCREEN_AREA_THRESHOLD);
+
+		SDL_Delay(100);
+	}
+
+	return (0);
 }
 
 /**
@@ -636,17 +695,45 @@ static double adjust_timers(double pts, struct av_decode_params *dp)
  */
 static void refresh_screen(void *data)
 {
+	int ret;
 	SDL_Event event;
-
 	struct av_decode_params *dp;
-	SDL_Texture *texture_frame = NULL;
+	SDL_Texture *texture_frame;
 
 	double true_delay;
 	double pts;
 
 	dp = (struct av_decode_params *)data;
-
+	texture_frame = NULL;
 again:
+
+	if (cmd_flags & CMD_WINDOWED)
+		goto windowed;
+
+	SDL_LockMutex(dp->pause_mutex);
+	check_pause:
+		if (dp->paused && !should_quit)
+		{
+			/*
+			 * Wait up to 40ms, as we need to check if there is a
+			 * possible SDL_QUIT event to be handled, otherwise,
+			 * the program would not be terminated until restarted
+			 * from pause.
+			 */
+			SDL_CondWaitTimeout(dp->pause_cond, dp->pause_mutex, 40);
+
+			/* Check if there is a SDL_QUIT event. */
+			SDL_PumpEvents();
+			ret = SDL_PeepEvents(&event, 1, SDL_PEEKEVENT, SDL_QUIT,
+				SDL_QUIT);
+			if (!ret)
+				goto check_pause;
+			else
+				return;
+		}
+	SDL_UnlockMutex(dp->pause_mutex);
+
+windowed:
 	/*
 	 * If error, do nothing.
 	 *
@@ -1181,10 +1268,14 @@ static int init_av(struct av_decode_params *dp, const char *file)
 #endif
 
 	/* Initial time (in seconds). */
-	dp->frame_timer = (double)time_microsecs() / 1000000.0;
+	dp->frame_timer = time_secs();
 
 	/* Frame last delay (in seconds). */
 	dp->frame_last_delay = 0.04; /* 40ms (or 25 fps). */
+
+	/* Pause status. */
+	dp->paused = 0;
+	dp->time_before_pause = 0.0;
 	return (0);
 
 out3:
@@ -1215,6 +1306,32 @@ static void finish_av(struct av_decode_params *dp)
 #if DECODE_TO_FILE
 	av_freep(&dp->dst_img[0]);
 #endif
+}
+
+/**
+ * @brief Stub function to ignore errors from
+ * XGetWindowAttributes().
+ *
+ * The screen_area_used() routine makes use of
+ * XGetWindowAttributes(), which in turn can try
+ * to get information from a window that may no
+ * longer exists, eg, in case a program closes.
+ *
+ * If the error is not handled, an error message is
+ * issued and the anipaper is terminated, which is
+ * clearly not the desired behavior. Therefore, this
+ * routine only serves to silence these errors.
+ *
+ * @param disp Display used.
+ * @param err Error event structure.
+ *
+ * @return Always 0.
+ */
+static int x_error_handler(Display *disp, XErrorEvent *err)
+{
+	((void)disp);
+	((void)err);
+	return (0);
 }
 
 /**
@@ -1336,6 +1453,7 @@ static int init_sdl(struct av_decode_params *dp)
 		if (!x11dip)
 			LOG_GOTO("Unable to open X11 display\n", out1);
 
+		XSetErrorHandler(x_error_handler);
 		x11w = RootWindow(x11dip, DefaultScreen(x11dip));
 
 		window = SDL_CreateWindowFrom((void*)x11w);
@@ -1360,6 +1478,15 @@ static int init_sdl(struct av_decode_params *dp)
 	if (!decode_thread)
 		LOG_GOTO("Unable to create the decode_packets thread!\n", out3);
 
+	/* Pause thread only in X11 mode. */
+	if (!(cmd_flags & CMD_WINDOWED))
+	{
+		pause_thread = SDL_CreateThread(pause_execution_thread,
+			"pause_thread", dp);
+		if (!pause_thread)
+			LOG_GOTO("Unable to create pause thread!\n", out3);
+	}
+
 	/* Allocate SDL Events. */
 	SDL_EVENT_REFRESH_SCREEN = SDL_RegisterEvents(2);
 	if (SDL_EVENT_REFRESH_SCREEN < 0)
@@ -1370,7 +1497,19 @@ static int init_sdl(struct av_decode_params *dp)
 	if (!screen_mutex)
 		LOG_GOTO("Unable to create screen mutex!\n", out3);
 
+	/* Pause mutex & cond. */
+	if (!(cmd_flags & CMD_WINDOWED))
+	{
+		dp->pause_mutex = SDL_CreateMutex();
+		dp->pause_cond  = SDL_CreateCond();
+		if (!dp->pause_mutex || !dp->pause_cond)
+			LOG_GOTO("Unable to create pause mutex!\n", out4);
+	}
+
 	return (0);
+out4:
+	if (!(cmd_flags & CMD_WINDOWED))
+		SDL_DestroyMutex(screen_mutex);
 out3:
 	SDL_DestroyRenderer(renderer);
 out2:
@@ -1397,6 +1536,12 @@ static void finish_sdl(void)
 	 */
 
 	/* Release resources. */
+	if (dp.pause_cond)
+		SDL_DestroyCond(dp.pause_cond);
+	if (dp.pause_mutex)
+		SDL_DestroyMutex(dp.pause_mutex);
+	if (screen_mutex)
+		SDL_DestroyMutex(screen_mutex);
 	if (renderer)
 		SDL_DestroyRenderer(renderer);
 	if (window)
@@ -1589,6 +1734,7 @@ int main(int argc, char **argv)
 			should_quit = 1;
 			SDL_CondSignal(picture_queue.cond);
 			SDL_CondSignal(packet_queue.cond);
+			SDL_CondSignal(dp.pause_cond);
 			break;
 		}
 
@@ -1598,6 +1744,9 @@ int main(int argc, char **argv)
 
 	SDL_WaitThread(enqueue_thread, NULL);
 	SDL_WaitThread(decode_thread, NULL);
+
+	if (!(cmd_flags & CMD_WINDOWED))
+		SDL_WaitThread(pause_thread, NULL);
 
 	ret = EXIT_SUCCESS;
 out3:
