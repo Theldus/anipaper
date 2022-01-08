@@ -681,7 +681,8 @@ static int pause_execution_thread(void *data)
 		/* Changes or keeps execution mode. */
 		change_execution(dp, s_area > SCREEN_AREA_THRESHOLD);
 
-		SDL_Delay(100);
+		/* Check again in CHECK_PAUSE_MS (100ms, by default). */
+		SDL_Delay(CHECK_PAUSE_MS);
 	}
 
 	return (0);

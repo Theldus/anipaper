@@ -35,6 +35,11 @@
 	#define SCREEN_AREA_THRESHOLD 70
 #endif
 
+	/* Check pause constant. */
+#ifndef CHECK_PAUSE_MS
+	#define CHECK_PAUSE_MS 100
+#endif
+
 	/* Logs. */
 	#define LOG_GOTO(log,lbl) \
 		do { \
