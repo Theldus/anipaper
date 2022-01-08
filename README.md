@@ -95,6 +95,18 @@ As Anipaper's actual CPU usage is generally distributed evenly across the cores/
 consumption of each core is more-or-less /num_cores, i.e: 8% usage means approximately 2%
 per core on a quadcore system.
 
+**Note 3**: All results obtained above were executed without pauses. Executions with pauses are
+expected to have much lower total CPU usage. (more on that below)
+
+### Pause support
+To further decrease CPU usage, Anipaper has a 'pause' mode: whenever the total area of visible
+windows (considering possible overlap) is greater than a configurable threshold (default 70%)
+the video playback pauses. This means that Anipaper will pause whenever a program is full screen
+or even if there are too many windows covering enough of the wallpaper.
+
+Considering a 'normal' usage where most windows occupy the entire screen (or most of it), Anipaper
+would run as little time as possible, and would not take over of the CPU.
+
 ## Known limitations
 Incompatibility with compositors. Since compositors use X11's root window to manage
 other windows, feature used by Anipaper. It is also clear that there is no Wayland
@@ -135,6 +147,22 @@ $ make
 # Optionally (if you want to install):
 $ make install # (PREFIX and DESTDIR allowed here, defaults to /usr/local/)
 ```
+
+### Custom builds
+Anipaper's pause support allows two types of customization: screen area (default 70%),
+and window check interval (100ms). Both can be configured via `SCREEN_AREA_THRESHOLD`
+and `CHECK_PAUSE_MS` macros:
+```bash
+# Set screen area threshold to 90%
+CFLAGS="-DSCREEN_AREA_THRESHOLD=90" make
+
+# Set window area polling to 200ms
+CFLAGS="-DCHECK_PAUSE_MS=200" make
+
+# Set both
+CFLAGS="-DSCREEN_AREA_THRESHOLD=90 -DCHECK_PAUSE_MS=200" make
+```
+or via `anipaper.h`.
 
 ## Contributing
 Anipaper is always open to the community and willing to accept contributions,
