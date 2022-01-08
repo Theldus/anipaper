@@ -112,6 +112,19 @@ Incompatibility with compositors. Since compositors use X11's root window to man
 other windows, feature used by Anipaper. It is also clear that there is no Wayland
 compatibility.
 
+### WMs: OpenBox, WindowMaker, Blackbox, Fluxbox, TWM, Awesome WM, DWM, i3 and others
+If you don't use a compositor, nothing to be done here, should work out of the box.
+
+### DEs: XFCE, KDE, MATE and others
+Disable compositor and any other programs that can write in the X11 root window:
+
+#### XFCE
+Close `xfdesktop` and disable compositing:
+```bash
+$ xfdesktop -Q
+$ xfconf-query --channel xfwm4 --property /general/use_compositing --type bool --set false
+```
+
 ## Building/Installing
 There is only two dependencies: SDL2 and FFmpeg libraries (`libavcodec`, `libavformat`,
 among others).
