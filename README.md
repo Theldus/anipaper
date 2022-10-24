@@ -32,6 +32,7 @@ Its options/command-line arguments are as follows:
 Usage: anipaper <input-file>
   -o Execute only once, without loop (loop enabled by default)
   -w Enable windowed mode (do not set wallpaper)
+  -b Enable borderless windowed mode (do not set wallpaper)
 
 Resolution options:
   -k (Keep) resolution, may appears smaller or bigger than the screen, preserve
