@@ -109,6 +109,7 @@ static int SDL_EVENT_REFRESH_SCREEN;
 #define CMD_RESOLUTION_SCALE  8
 #define CMD_RESOLUTION_FIT   16
 #define CMD_HW_ACCEL         32
+#define CMD_BORDERLESS       64
 static int cmd_flags = CMD_LOOP | CMD_RESOLUTION_FIT;
 static char device_type[16];
 
@@ -1439,9 +1440,12 @@ static int init_sdl(struct av_decode_params *dp)
 			XCloseDisplay(x11dip);
 
 		/* Create window. */
+		int flags = SDL_WINDOW_SHOWN;
+		if (cmd_flags & CMD_BORDERLESS)
+			flags |= SDL_WINDOW_BORDERLESS;
 		window = SDL_CreateWindow("video",
 			SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-			width, height, SDL_WINDOW_SHOWN);
+			width, height, flags);
 		if (!window)
 			LOG_GOTO("Unable to create a new SDL Window!\n", out1);
 	}
@@ -1561,7 +1565,8 @@ static void usage(const char *prgname)
 	fprintf(stderr, "Usage: %s <input-file>\n", prgname);
 	fprintf(stderr,
 		"  -o Execute only once, without loop (loop enabled by default)\n"
-		"  -w Enable windowed mode (do not set wallpaper)\n\n"
+		"  -w Enable windowed mode (do not set wallpaper)\n"
+		"  -b Enable borderless windowed mode (do not set wallpaper)\n\n"
 		"Resolution options:\n"
 		"  -k (Keep) resolution, may appears smaller or bigger\n"
 		"     than the screen, preserve aspect ratio\n\n"
@@ -1643,7 +1648,7 @@ static int get_resolution(const char *res, int *w, int *h)
 static char* parse_args(int argc, char **argv)
 {
 	int c; /* Current arg. */
-	while ((c = getopt(argc, argv, "howksfr:d:")) != -1)
+	while ((c = getopt(argc, argv, "howbksfr:d:")) != -1)
 	{
 		switch (c)
 		{
@@ -1655,6 +1660,9 @@ static char* parse_args(int argc, char **argv)
 				break;
 			case 'w':
 				cmd_flags |= CMD_WINDOWED;
+				break;
+			case 'b':
+				cmd_flags |= CMD_WINDOWED | CMD_BORDERLESS;
 				break;
 			case 'k':
 				cmd_flags &= ~(CMD_RESOLUTION_SCALE|CMD_RESOLUTION_FIT);
