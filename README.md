@@ -47,6 +47,8 @@ Resolution options:
   
   -d <dev> Enable HW accel for a given device (like vaapi or vdpau)
 
+  -p Enable pause/resume commands over D-Bus
+
   -h This help
 
 Note:
@@ -127,7 +129,7 @@ $ xfconf-query --channel xfwm4 --property /general/use_compositing --type bool -
 ```
 
 ## Building/Installing
-There is only two dependencies: SDL2 and FFmpeg libraries (`libavcodec`, `libavformat`,
+There is only three dependencies: SDL2, GLib, and FFmpeg libraries (`libavcodec`, `libavformat`,
 among others).
 
 However, it is worth noting that due to constant API change between major
@@ -140,7 +142,7 @@ A typical build on Ubuntu 18.04.5 would look something like:
 ### Dependencies
 ```bash
 # Install SDL2
-$ sudo apt install libsdl2-dev
+$ sudo apt install libsdl2-dev libglib2.0-dev
 
 
 # Install FFmpeg's libraries (nasm and pkg-config are FFmpeg build dependencies):

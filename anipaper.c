@@ -32,8 +32,10 @@
 #include <libavfilter/avfilter.h>
 #include <libswscale/swscale.h>
 #include <X11/Xlib.h>
+#include <glib.h>
 
 #include "anipaper.h"
+#include "dbus-pause.h"
 
 /* Queues size. */
 #define MAX_PACKET_QUEUE 128
@@ -110,6 +112,7 @@ static int SDL_EVENT_REFRESH_SCREEN;
 #define CMD_RESOLUTION_FIT   16
 #define CMD_HW_ACCEL         32
 #define CMD_BORDERLESS       64
+#define CMD_DBUS            128
 static int cmd_flags = CMD_LOOP | CMD_RESOLUTION_FIT;
 static char device_type[16];
 
@@ -653,6 +656,54 @@ out:
 }
 
 /**
+ * @brief Callback for when the pause method is called over D-Bus
+ */
+static gboolean on_handle_pause(OrgTheldusAnipaperWindow *skeleton, GDBusMethodInvocation *invocation, gpointer data)
+{
+	int *should_pause = (int*) data;
+	*should_pause = !(*should_pause);
+	org_theldus_anipaper_window_complete_pause(skeleton, invocation);
+	return TRUE;
+}
+
+/**
+ * @brief Callback for when a D-Bus connection is acquired
+ */
+static void on_bus_acquired(GDBusConnection *connection, const gchar *name, gpointer data)
+{
+	OrgTheldusAnipaperWindow *skeleton;
+	GError *error = NULL;
+	skeleton = org_theldus_anipaper_window_skeleton_new();
+	g_signal_connect(skeleton,
+		"handle-pause",
+		G_CALLBACK(on_handle_pause),
+		data
+	);
+	g_dbus_interface_skeleton_export((GDBusInterfaceSkeleton*) skeleton,
+		connection,
+		"/org/theldus/anipaper/window",
+		&error
+	);
+}
+
+/**
+ * @brief Initializes D-Bus pause/resume feature
+ */
+static void init_dbus(GMainLoop **loop, int *should_pause)
+{
+	g_bus_own_name(G_BUS_TYPE_SESSION,
+		"org.theldus.anipaper",
+		G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT | G_BUS_NAME_OWNER_FLAGS_REPLACE,
+		on_bus_acquired,
+		NULL,
+		NULL,
+		(gpointer) should_pause,
+		NULL
+	);
+	*loop = g_main_loop_new(NULL, FALSE);
+}
+
+/**
  * @brief Checks at fixed interval if the total area
  * of the non-minimized windows is greater than
  * some threshold, if so, pause the Anipaper execution,
@@ -666,21 +717,30 @@ out:
  */
 static int pause_execution_thread(void *data)
 {
+	int should_pause = 0;
 	int s_area;
 	struct av_decode_params *dp;
-
+	GMainLoop *loop = NULL;
 	dp = (struct av_decode_params *)data;
+	if (cmd_flags & CMD_DBUS)
+		init_dbus(&loop, &should_pause);
 
 	while (1)
 	{
 		if (should_quit)
 			break;
-
-		s_area = screen_area_used(x11dip, dp->screen_width,
-			dp->screen_height);
+		if (!(cmd_flags & CMD_DBUS)) {
+			s_area = screen_area_used(x11dip,
+				dp->screen_width,
+				dp->screen_height
+			);
+			should_pause = s_area > SCREEN_AREA_THRESHOLD;
+		}
+		else
+			g_main_context_iteration(g_main_loop_get_context(loop), FALSE);
 
 		/* Changes or keeps execution mode. */
-		change_execution(dp, s_area > SCREEN_AREA_THRESHOLD);
+		change_execution(dp, should_pause);
 
 		/* Check again in CHECK_PAUSE_MS (100ms, by default). */
 		SDL_Delay(CHECK_PAUSE_MS);
@@ -709,7 +769,7 @@ static void refresh_screen(void *data)
 	texture_frame = NULL;
 again:
 
-	if (cmd_flags & CMD_WINDOWED)
+	if (cmd_flags & CMD_WINDOWED && !(cmd_flags & CMD_DBUS))
 		goto windowed;
 
 	SDL_LockMutex(dp->pause_mutex);
@@ -1483,8 +1543,8 @@ static int init_sdl(struct av_decode_params *dp)
 	if (!decode_thread)
 		LOG_GOTO("Unable to create the decode_packets thread!\n", out3);
 
-	/* Pause thread only in X11 mode. */
-	if (!(cmd_flags & CMD_WINDOWED))
+	/* Pause thread only in X11 mode or if D-Bus is enabled. */
+	if (!((cmd_flags & CMD_WINDOWED && !(cmd_flags & CMD_DBUS))))
 	{
 		pause_thread = SDL_CreateThread(pause_execution_thread,
 			"pause_thread", dp);
@@ -1556,6 +1616,7 @@ static void finish_sdl(void)
 		XCloseDisplay(x11dip);
 }
 
+
 /**
  * @brief Show program usage.
  * @param prgname Program name.
@@ -1575,6 +1636,7 @@ static void usage(const char *prgname)
 		"  -f (Fit) to screen. Make the video fit into the screen (default)\n\n"
 		"  -r Set screen resolution, in format: WIDTHxHEIGHT\n\n"
 		"  -d <dev> Enable HW accel for a given device (like vaapi or vdpau)\n\n"
+		"  -p Enable pause/resume commands over D-Bus\n\n"
 		"  -h This help\n\n"
 		"Note:\n"
 		"  Please note that some options depends on the screen resolution.\n"
@@ -1648,7 +1710,7 @@ static int get_resolution(const char *res, int *w, int *h)
 static char* parse_args(int argc, char **argv)
 {
 	int c; /* Current arg. */
-	while ((c = getopt(argc, argv, "howbksfr:d:")) != -1)
+	while ((c = getopt(argc, argv, "howbksfr:d:p")) != -1)
 	{
 		switch (c)
 		{
@@ -1687,6 +1749,9 @@ static char* parse_args(int argc, char **argv)
 			case 'd':
 				strncpy(device_type, optarg, sizeof(device_type) - 1);
 				cmd_flags |= CMD_HW_ACCEL;
+				break;
+			case 'p':
+				cmd_flags |= CMD_DBUS;
 				break;
 			default:
 				usage(argv[0]);
@@ -1754,7 +1819,7 @@ int main(int argc, char **argv)
 	SDL_WaitThread(enqueue_thread, NULL);
 	SDL_WaitThread(decode_thread, NULL);
 
-	if (!(cmd_flags & CMD_WINDOWED))
+	if (!((cmd_flags & CMD_WINDOWED && !(cmd_flags & CMD_DBUS))))
 		SDL_WaitThread(pause_thread, NULL);
 
 	ret = EXIT_SUCCESS;

@@ -42,14 +42,14 @@ FFMPEG_LIBS = libavcodec \
 
 CC ?= gcc
 CFLAGS += -Wall -Wextra -std=c99 -pedantic -O3
-CFLAGS += $(shell pkg-config --cflags $(FFMPEG_LIBS) sdl2)
+CFLAGS += $(shell pkg-config --cflags $(FFMPEG_LIBS) sdl2 glib-2.0)
 LDLIBS  = $(shell pkg-config --libs --static $(FFMPEG_LIBS))
 LDLIBS += $(shell pkg-config --libs sdl2)
 LDLIBS += -lX11
 
 TARGET = anipaper
 
-C_SRC = anipaper.c util.c
+C_SRC = anipaper.c util.c dbus-pause.c
 OBJS = $(C_SRC:.c=.o)
 
 .phony: all clean
