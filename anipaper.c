@@ -23,6 +23,7 @@
  */
 
 #include <stdio.h>
+#include <signal.h>
 #include <getopt.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -103,15 +104,18 @@ static SDL_Thread *pause_thread;
 static int SDL_EVENT_REFRESH_SCREEN;
 
 /* CMD Flags/parameters. */
-#define CMD_LOOP              1
-#define CMD_WINDOWED          2
-#define CMD_RESOLUTION_KEEP   4
-#define CMD_RESOLUTION_SCALE  8
-#define CMD_RESOLUTION_FIT   16
-#define CMD_HW_ACCEL         32
-#define CMD_BORDERLESS       64
-static int cmd_flags = CMD_LOOP | CMD_RESOLUTION_FIT;
+#define CMD_BACKGROUND        1 /* As wallpaper background. */
+#define CMD_LOOP              2
+#define CMD_WINDOWED          4
+#define CMD_RESOLUTION_KEEP   8
+#define CMD_RESOLUTION_SCALE 16
+#define CMD_RESOLUTION_FIT   32
+#define CMD_HW_ACCEL         64
+#define CMD_BORDERLESS      128
+#define CMD_PAUSE_SIGNAL    256
+static int cmd_flags = CMD_BACKGROUND | CMD_LOOP | CMD_RESOLUTION_FIT;
 static char device_type[16];
+static int should_pause;
 
 /**
  * @brief Initialize the packet queue.
@@ -666,6 +670,7 @@ out:
  */
 static int pause_execution_thread(void *data)
 {
+	int sp;
 	int s_area;
 	struct av_decode_params *dp;
 
@@ -676,11 +681,18 @@ static int pause_execution_thread(void *data)
 		if (should_quit)
 			break;
 
-		s_area = screen_area_used(x11dip, dp->screen_width,
-			dp->screen_height);
+		sp = should_pause;
+		if (!sp && (cmd_flags & CMD_BACKGROUND))
+		{
+			s_area = screen_area_used(x11dip, dp->screen_width,
+				dp->screen_height);
+
+			if (s_area > SCREEN_AREA_THRESHOLD)
+				sp = 1;
+		}
 
 		/* Changes or keeps execution mode. */
-		change_execution(dp, s_area > SCREEN_AREA_THRESHOLD);
+		change_execution(dp, sp);
 
 		/* Check again in CHECK_PAUSE_MS (100ms, by default). */
 		SDL_Delay(CHECK_PAUSE_MS);
@@ -709,8 +721,8 @@ static void refresh_screen(void *data)
 	texture_frame = NULL;
 again:
 
-	if (cmd_flags & CMD_WINDOWED)
-		goto windowed;
+	if (!(cmd_flags & (CMD_PAUSE_SIGNAL|CMD_BACKGROUND)))
+		goto not_pause;
 
 	SDL_LockMutex(dp->pause_mutex);
 	check_pause:
@@ -735,7 +747,7 @@ again:
 		}
 	SDL_UnlockMutex(dp->pause_mutex);
 
-windowed:
+not_pause:
 	/*
 	 * If error, do nothing.
 	 *
@@ -1483,8 +1495,8 @@ static int init_sdl(struct av_decode_params *dp)
 	if (!decode_thread)
 		LOG_GOTO("Unable to create the decode_packets thread!\n", out3);
 
-	/* Pause thread only in X11 mode. */
-	if (!(cmd_flags & CMD_WINDOWED))
+	/* Pause thread only in X11 mode or if explicitly enabled. */
+	if ((cmd_flags & (CMD_BACKGROUND|CMD_PAUSE_SIGNAL)))
 	{
 		pause_thread = SDL_CreateThread(pause_execution_thread,
 			"pause_thread", dp);
@@ -1503,7 +1515,7 @@ static int init_sdl(struct av_decode_params *dp)
 		LOG_GOTO("Unable to create screen mutex!\n", out3);
 
 	/* Pause mutex & cond. */
-	if (!(cmd_flags & CMD_WINDOWED))
+	if ((cmd_flags & (CMD_BACKGROUND|CMD_PAUSE_SIGNAL)))
 	{
 		dp->pause_mutex = SDL_CreateMutex();
 		dp->pause_cond  = SDL_CreateCond();
@@ -1513,12 +1525,11 @@ static int init_sdl(struct av_decode_params *dp)
 
 	return (0);
 out4:
-	if (!(cmd_flags & CMD_WINDOWED))
-		SDL_DestroyMutex(screen_mutex);
+	SDL_DestroyMutex(screen_mutex);
 out3:
 	SDL_DestroyRenderer(renderer);
 out2:
-	if (!(cmd_flags & CMD_WINDOWED))
+	if (cmd_flags & CMD_BACKGROUND)
 		XCloseDisplay(x11dip);
 	else
 		SDL_DestroyWindow(window);
@@ -1552,7 +1563,7 @@ static void finish_sdl(void)
 	if (window)
 		SDL_DestroyWindow(window);
 	SDL_Quit();
-	if (!(cmd_flags & CMD_WINDOWED))
+	if (cmd_flags & CMD_BACKGROUND)
 		XCloseDisplay(x11dip);
 }
 
@@ -1575,6 +1586,7 @@ static void usage(const char *prgname)
 		"  -f (Fit) to screen. Make the video fit into the screen (default)\n\n"
 		"  -r Set screen resolution, in format: WIDTHxHEIGHT\n\n"
 		"  -d <dev> Enable HW accel for a given device (like vaapi or vdpau)\n\n"
+		"  -p Enable pause/resume commands via SIGUSR1\n\n"
 		"  -h This help\n\n"
 		"Note:\n"
 		"  Please note that some options depends on the screen resolution.\n"
@@ -1648,7 +1660,7 @@ static int get_resolution(const char *res, int *w, int *h)
 static char* parse_args(int argc, char **argv)
 {
 	int c; /* Current arg. */
-	while ((c = getopt(argc, argv, "howbksfr:d:")) != -1)
+	while ((c = getopt(argc, argv, "howbksfr:d:p")) != -1)
 	{
 		switch (c)
 		{
@@ -1659,9 +1671,11 @@ static char* parse_args(int argc, char **argv)
 				cmd_flags &= ~CMD_LOOP;
 				break;
 			case 'w':
+				cmd_flags &= ~CMD_BACKGROUND;
 				cmd_flags |= CMD_WINDOWED;
 				break;
 			case 'b':
+				cmd_flags &= ~CMD_BACKGROUND;
 				cmd_flags |= CMD_WINDOWED | CMD_BORDERLESS;
 				break;
 			case 'k':
@@ -1688,6 +1702,9 @@ static char* parse_args(int argc, char **argv)
 				strncpy(device_type, optarg, sizeof(device_type) - 1);
 				cmd_flags |= CMD_HW_ACCEL;
 				break;
+			case 'p':
+				cmd_flags |= CMD_PAUSE_SIGNAL;
+				break;
 			default:
 				usage(argv[0]);
 				break;
@@ -1704,6 +1721,18 @@ static char* parse_args(int argc, char **argv)
 	return (argv[optind]);
 }
 
+/**
+ * @Brief Signal handler for pause commands.
+ *
+ * @param sig Signal number, ignored.
+ */
+void sig_pause(int sig)
+{
+	((void)sig);
+	should_pause = !should_pause;
+	signal(SIGUSR1, sig_pause);
+}
+
 /* Main =). */
 int main(int argc, char **argv)
 {
@@ -1715,6 +1744,9 @@ int main(int argc, char **argv)
 
 	/* Parse arguments. */
 	input_file = parse_args(argc, argv);
+
+	/* Register pause signal. */
+	signal(SIGUSR1, sig_pause);
 
 	/* Initialize AV stuff. */
 	if (init_av(&dp, input_file) < 0)
@@ -1754,7 +1786,7 @@ int main(int argc, char **argv)
 	SDL_WaitThread(enqueue_thread, NULL);
 	SDL_WaitThread(decode_thread, NULL);
 
-	if (!(cmd_flags & CMD_WINDOWED))
+	if (cmd_flags & (CMD_BACKGROUND|CMD_PAUSE_SIGNAL))
 		SDL_WaitThread(pause_thread, NULL);
 
 	ret = EXIT_SUCCESS;

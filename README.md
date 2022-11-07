@@ -44,8 +44,10 @@ Resolution options:
   -f (Fit) to screen. Make the video fit into the screen (default)
 
   -r Set screen resolution, in format: WIDTHxHEIGHT
-  
+
   -d <dev> Enable HW accel for a given device (like vaapi or vdpau)
+
+  -p Enable pause/resume commands via SIGUSR1
 
   -h This help
 
